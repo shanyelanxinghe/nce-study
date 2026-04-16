@@ -18,5 +18,5 @@
 - 每周：复习1个单元，做1套配套练习题
 - 每月：复盘1册，巩固语法和句型，背诵重点课文 
 - 每季度：整理总结
-  我的github备用学习库 https://github.com/shanyelanxinghe/nce-study
+- 我的github备用学习库 https://github.com/shanyelanxinghe/nce-study
 
