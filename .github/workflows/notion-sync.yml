@@ -1,8 +1,8 @@
-name: 2026双向同步
+name: Notion双向同步
 on:
   workflow_dispatch
   schedule:
-    - cron: '0 0 * * *'
+    - '0 0 * * *'
 
 permissions:
   contents: write
@@ -13,10 +13,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: install
+      - name: install lib
         run: pip install notion-client
 
-      - name: sync
+      - name: two way sync
         env:
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
           NOTION_PAGE_ID: ${{ secrets.NOTION_PAGE_ID }}
@@ -24,32 +24,37 @@ jobs:
           python3 <<EOF
           import os
           from notion_client import Client
-          n = Client(auth=os.getenv("NOTION_TOKEN"))
+          
+          nt = Client(auth=os.getenv("NOTION_TOKEN"))
           pid = os.getenv("NOTION_PAGE_ID")
-
-          f = "notion-sync.md"
-          local = ""
-          if os.path.exists(f):
-            with open(f,"r",encoding=utf-8) as t:local=t.read()
-
-          blocks = n.blocks.children.list(pid)["results"]
-          page = ""
+          file = "notion-sync.md"
+          
+          local_text = ""
+          if os.path.exists(file):
+              with open(file,"r",encoding="utf-8") as f:
+                  local_text = f.read().replace("# 双向整洁笔记\n\n","").strip()
+          
+          blocks = nt.blocks.children.list(block_id=pid)["results"]
+          page_text = ""
           for b in blocks:
-            if b["type"]=="paragraph" and b["rich_text"]:
-              page += b["rich_text"][0]["text"]["content"]+"\n\n"
-
-          if local.strip() != page.strip():
-            if len(local)>len(page):
-              for b in blocks:n.blocks.delete(b["id"])
-              n.blocks.children.append(pid,children=[{"type":"paragraph","rich_text":[{"text":{"content":local}}]}))
-            else:
-              with open(f,"w",encoding=utf-8) as w:w.write("# 双向笔记\n\n"+page)
+              if b["type"] == "paragraph" and b["paragraph"]["rich_text"]:
+                  page_text += b["paragraph"]["rich_text"][0]["text"]["content"] + "\n\n"
+          page_text = page_text.strip()
+          
+          if local_text != page_text:
+              if len(local_text) > len(page_text):
+                  for item in blocks:
+                      nt.blocks.delete(block_id=item["id"])
+                  nt.blocks.children.append(block_id=pid,children=[{"type":"paragraph","paragraph":{"rich_text":[{"text":{"content":local_text}}]}})
+              else:
+                  with open(file,"w",encoding="utf-8") as f:
+                      f.write("# 双向整洁笔记\n\n"+page_text)
           EOF
 
-      - name: push
+      - name: git push
         run: |
-          git config user.name bot
+          git config user.name syncbot
           git config user.email bot@qq.com
-          git add .
+          git add notion-sync.md
           git commit -m update || true
           git push || true
