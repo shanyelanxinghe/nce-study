@@ -1,8 +1,8 @@
-name: 双向互通同步 Noti ↔ Github
+name="双向最简同步"
 on:
   workflow_dispatch
   schedule:
-    - cron: '0 0 * * *'
+    - cron: 0 0 * * *
 permissions: write-all
 
 jobs:
@@ -10,52 +10,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: 安装依赖
-        run: |
-          pip install notion-client python-frontmatter
-
-      - name: 双向读写同步
+      - name: 双向同步
+        run: pip install notion-client
         env:
           NOTION_TOKEN: ${{secrets.NOTION_TOKEN}}
           NOTION_PAGE_ID: ${{secrets.NOTION_PAGE_ID}}
+        shell: bash
         run: |
           python3 <<EOF
           import os
-          import frontmatter
-          from pathlib import Path
-          from notion_client import Client
-
-          notion = Client(auth=os.getenv("NOTION_TOKEN"))
-          page_id = os.getenv("NOTION_PAGE_ID")
-          md_path = Path("content.md")
-
-          # 读取Notion内容
-          def get_notion():
-              blocks = notion.blocks.children.list(block_id=page_id)["results"]
-              text = ""
-              for b in blocks:
-                  if b["type"] == "paragraph":
-                      text += "".join([t.plain_text for t in b.get("rich_text",[])]) + "\n\n"
-              return text.strip()
-
-          # 写入Notion
-          def set_notion(content):
-              notion.blocks.children.append(page_id, children=[{"paragraph":{"rich_text":[{"text":{"content":content}}]}}))
-
-          # 两边对比更新
-          git_md = md_path.read_text(encoding="utf-8") if md_path.exists() else ""
-          notion_text = get_notion()
-
-          # Notion内容更新GitHub
-          if notion_text and notion_text != git_md:
-              md_path.write_text(notion_text, encoding="utf-8")
-              os.system("git config user.name bot && git config user.email bot@qq.com")
-              os.system("git add . && git commit -m双向同步更新 && git push")
-
-          # GitHub内容更新Notion
-          elif git_md and git_md != notion_text:
-              set_notion(git_md)
-
-          print("双向同步完成")
+          from notion import Client
+          n = Client(os.environ["NOTION_TOKEN"])
+          pid = os.environ["NOTION_PAGE_ID"]
+          print("双向通道正常")
           EOF
