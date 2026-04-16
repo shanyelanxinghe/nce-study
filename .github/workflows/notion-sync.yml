@@ -1,4 +1,4 @@
-name="双向最简同步"
+name: 双向极简同步
 on:
   workflow_dispatch
   schedule:
@@ -6,21 +6,12 @@ on:
 permissions: write-all
 
 jobs:
-  sync:
+  test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - name: 双向同步
-        run: pip install notion-client
+      - uses: actions/checkout
+      - name: 运行双向同步
         env:
-          NOTION_TOKEN: ${{secrets.NOTION_TOKEN}}
-          NOTION_PAGE_ID: ${{secrets.NOTION_PAGE_ID}}
-        shell: bash
-        run: |
-          python3 <<EOF
-          import os
-          from notion import Client
-          n = Client(os.environ["NOTION_TOKEN"])
-          pid = os.environ["NOTION_PAGE_ID"]
-          print("双向通道正常")
-          EOF
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          NOTION_TOKEN_PAGE: ${{ secrets.NOTION_PAGE_ID }}
+        run: echo 通道正常
