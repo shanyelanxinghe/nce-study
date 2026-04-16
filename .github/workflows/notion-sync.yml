@@ -21,7 +21,7 @@ jobs:
 
       - name: 运行同步脚本
         env:
-          NOTION_API_KEY: ${{ secrets.NOTION_API_KEY }}
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
           NOTION_PAGE_ID: ${{ secrets.NOTION_PAGE_ID }}
         run: |
           cat > sync.py << 'EOF'
@@ -29,7 +29,7 @@ jobs:
           from notion_client import Client
 
           # 读取密钥
-          api_key = os.getenv('NOTION_API_KEY')
+          api_key = os.getenv('NOTION_TOKEN')
           page_id = os.getenv('NOTION_PAGE_ID')
 
           # 初始化客户端
