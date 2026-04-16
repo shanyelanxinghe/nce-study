@@ -1,0 +1,21 @@
+name: Sync Notion to GitHub
+on:
+  schedule:
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Sync Notion Page to Markdown
+        uses: longbowu/notion-to-github-action@v1
+        with:
+          notion_token: ${{ secrets.NOTION_TOKEN }}
+          notion_page_id: ${{ secrets.NOTION_PAGE_ID }}
+          output_path: '我的新概念英语(NCE)学习库.md'
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          sync_images: 'true'
