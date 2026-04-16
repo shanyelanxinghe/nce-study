@@ -21,7 +21,7 @@ jobs:
       - name: 安装Notion官方SDK
         run: pip install notion-client
 
-      - name: 双边整洁排版·双向精准防循环同步
+      - name: 双边整洁排版双向同步
         env:
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
           NOTION_PAGE_ID: ${{ secrets.NOTION_PAGE_ID }}
@@ -34,14 +34,12 @@ jobs:
           page_id = os.getenv('NOTION_PAGE_ID')
           notion = Client(auth=api_key)
 
-          # 读取github文档，保留干净排版
           file_name = "notion-sync.md"
           github_text = ""
           if os.path.exists(file_name):
               with open(file_name,"r",encoding="utf-8") as f:
                   github_text = f.read().replace("# 双向整洁笔记\n\n","").strip()
 
-          # 规整读取notion段落，换行干净
           blocks = notion.blocks.children.list(block_id=page_id).get("results",[])
           notion_text = ""
           for b in blocks:
@@ -49,25 +47,22 @@ jobs:
                   notion_text += b["paragraph"]["rich_text"][0]["text"].get("content","") + "\n\n"
           notion_text = notion_text.strip()
 
-          # 内容不一样才同步，彻底杜绝循环爆红
           if github_text != notion_text:
-              # GitHub更新→工整写入Notion
               if len(github_text) > len(notion_text):
                   for item in blocks:
                       notion.blocks.delete(block_id=item["id"])
                   notion.blocks.children.append(
                       block_id=page_id,
-                      children=[{"type":"paragraph","paragraph":{"rich_text":[{"type":"text","text":{"content":github_text}}]}}]
+                      children=[{"type":"paragraph","paragraph":{"rich_text":[{"type":"text","text":{"content":github_text}}]}}
                   )
-              # Notion更新→清爽排版写入GitHub
               else:
                   with open(file_name,"w",encoding="utf-8") as f:
                       f.write("# 双向整洁笔记\n\n"+notion_text)
           EOF
 
-      - name: Git提交归档
-      run: |
-        git config user.name Notion同步机器人
-        git config user.email bot@users.noreply.github.com
-        git add notion-sync.md
-        if git diff --quiet;then echo 无内容更新;else git commit -m 双边排版双向同步更新;git push;fi
+      - name: Git提交
+        run: |
+          git config --global user.name "Notion Sync Bot"
+          git config --global user.email "bot@users.noreply.github.com"
+          git add notion-sync.md
+          if git diff --quiet;then echo 无更新;else git commit -m 双向整洁同步;git push;fi
