@@ -1,13 +1,9 @@
-name: 2026最新-Notion同步GitHub
-
+name: 双向互通同步 Noti ↔ Github
 on:
-  workflow_dispatch:  # 允许手动触发
+  workflow_dispatch
   schedule:
-    - cron: '0 0 * * *'  # 每天UTC凌晨运行（对应北京时间早8点）
-
-# 关键：给Actions写入权限，解决push失败
-permissions:
-  contents: write
+    - cron: '0 0 * * *'
+permissions: write-all
 
 jobs:
   sync:
@@ -15,64 +11,51 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: 安装Python环境
+      - name: 安装依赖
         run: |
-          sudo apt-get update && sudo apt-get install -y python3 python3-pip
+          pip install notion-client python-frontmatter
 
-      - name: 安装Notion官方SDK
-        run: |
-          pip install notion-client
-
-      - name: 运行同步脚本
+      - name: 双向读写同步
         env:
-          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
-          NOTION_PAGE_ID: ${{ secrets.NOTION_PAGE_ID }}
+          NOTION_TOKEN: ${{secrets.NOTION_TOKEN}}
+          NOTION_PAGE_ID: ${{secrets.NOTION_PAGE_ID}}
         run: |
-          cat > sync.py << 'EOF'
+          python3 <<EOF
           import os
+          import frontmatter
+          from pathlib import Path
           from notion_client import Client
 
-          # 读取密钥
-          api_key = os.getenv('NOTION_TOKEN')
-          page_id = os.getenv('NOTION_PAGE_ID')
+          notion = Client(auth=os.getenv("NOTION_TOKEN"))
+          page_id = os.getenv("NOTION_PAGE_ID")
+          md_path = Path("content.md")
 
-          # 初始化客户端
-          notion = Client(auth=api_key)
+          # 读取Notion内容
+          def get_notion():
+              blocks = notion.blocks.children.list(block_id=page_id)["results"]
+              text = ""
+              for b in blocks:
+                  if b["type"] == "paragraph":
+                      text += "".join([t.plain_text for t in b.get("rich_text",[])]) + "\n\n"
+              return text.strip()
 
-          # 导出页面内容为Markdown
-          try:
-              # 获取页面子区块
-              blocks = notion.blocks.children.list(block_id=page_id).get("results", [])
-              
-              markdown_content = "# 自动同步的Notion内容\n\n"
-              
-              # 简单转换为Markdown（可根据需要扩展）
-              for block in blocks:
-                  if block["type"] == "paragraph":
-                      text = block["paragraph"]["rich_text"][0]["text"]["content"] if block["paragraph"]["rich_text"] else ""
-                      markdown_content += text + "\n\n"
-              
-              # 写入文件
-              with open("notion-sync.md", "w", encoding="utf-8") as f:
-                  f.write(markdown_content)
-              
-              print("✅ 成功生成Markdown文件！")
-          except Exception as e:
-              print(f"❌ 导出失败: {e}")
-              exit(1)
+          # 写入Notion
+          def set_notion(content):
+              notion.blocks.children.append(page_id, children=[{"paragraph":{"rich_text":[{"text":{"content":content}}]}}))
+
+          # 两边对比更新
+          git_md = md_path.read_text(encoding="utf-8") if md_path.exists() else ""
+          notion_text = get_notion()
+
+          # Notion内容更新GitHub
+          if notion_text and notion_text != git_md:
+              md_path.write_text(notion_text, encoding="utf-8")
+              os.system("git config user.name bot && git config user.email bot@qq.com")
+              os.system("git add . && git commit -m双向同步更新 && git push")
+
+          # GitHub内容更新Notion
+          elif git_md and git_md != notion_text:
+              set_notion(git_md)
+
+          print("双向同步完成")
           EOF
-
-          python3 sync.py
-
-      - name: 提交到GitHub
-        run: |
-          git config --global user.name "Notion Sync Bot"
-          git config --global user.email "bot@users.noreply.github.com"
-          git add .
-          # 优化：先检查是否有变更，避免空提交报错
-          if git diff --cached --quiet; then
-            echo "无内容更新，跳过提交"
-          else
-            git commit -m "2026自动同步: $(date +'%Y-%m-%d %H:%M:%S')"
-            git push
-          fi
