@@ -1,4 +1,4 @@
-name: 2026双向-Notion⇄GitHub最终稳定完美版
+name: 2026双向-Notion⇄GitHub互通同步
 on:
   workflow_dispatch
   schedule:
@@ -13,15 +13,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: 安装Python运行环境
+      - name: 安装Python环境
         run: |
-          sudo apt-get update
-          sudo apt-get install -y python3 python3-pip
+          sudo apt-get update && sudo apt-get install -y python3 python3-pip
 
-      - name: 安装Notion官方稳定接口库
+      - name: 安装Notion官方SDK
         run: pip install notion-client
 
-      - name: 双向精准对齐·整洁排版同步
+      - name: 整洁排版双向对比同步
         env:
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
           NOTION_PAGE_ID: ${{ secrets.NOTION_PAGE_ID }}
@@ -30,67 +29,44 @@ jobs:
           import os
           from notion_client import Client
 
-          # 读取密钥信息
-          api_token = os.getenv("NOTION_TOKEN")
-          page_id = os.getenv("NOTION_PAGE_ID")
-          notion = Client(auth=api_token)
+          api_key = os.getenv('NOTION_TOKEN')
+          page_id = os.getenv('NOTION_PAGE_ID')
+          notion = Client(auth=api_key)
 
-          # 文档文件名固定
-          file_name = "notion笔记合集.md"
+          # 读取github文档
+          file = "notion-sync.md"
+          github_md = ""
+          if os.path.exists(file):
+              with open(file,"r",encoding="utf-8") as f:
+                  github_md = f.read().replace("# 笔记整洁同步\n\n","").strip()
 
-          # 读取GitHub本地排版内容
-          github_text = ""
-          if os.path.exists(file_name):
-              with open(file_name, "r", encoding="utf-8") as f:
-                  github_text = f.read().replace("# Notion 每日笔记同步\n\n", "").strip()
-
-          # 规整读取Notion段落文字
-          block_list = notion.blocks.children.list(block_id=page_id)["results"]
+          # 读取notion内容
+          blocks = notion.blocks.list(page_id)["results"]
           notion_text = ""
-          for item in block_list:
-              if item["type"] == "paragraph":
-                  text_info = item["paragraph"]
-                  if text_info["rich_text"]:
-                      notion_text += text_info["rich_text"][0]["text"]["content"] + "\n\n"
+          for b in blocks:
+              if b["type"]=="paragraph" and b["paragraph"]["rich_text"]:
+                  notion_text += b["paragraph"]["rich_text"][0]["text"]["content"] + "\n\n"
           notion_text = notion_text.strip()
 
-          # 内容不一致才执行同步 彻底杜绝循环死链
-          if github_text != notion_text:
-
-              # GitHub文档更新 → 整洁写入Notion页面
-              if len(github_text) > len(notion_text):
-                  for block in block_list:
-                      notion.blocks.delete(block_id=block["id"])
-                  notion.blocks.children.append(
-                      block_id=page_id,
-                      children=[{
-                          "type": "paragraph",
-                          "rich_text": [{
-                              "type": "text",
-                              "text": {"content": github_text}
-                          }]
-                      }]
-                  )
-                  print("✅ GitHub内容规整同步至Notion完成")
-
-              # Notion笔记更新 → 美观排版写入GitHub
+          # 不一样才同步，杜绝循环
+          if github_md != notion_text:
+              # github更新写入notion
+              if len(github_md) > len(notion_text):
+                  for b in blocks:
+                      notion.blocks.delete(b["id"])
+                  notion.blocks.children.append(page_id,children=[{
+                      "type":"paragraph",
+                      "rich_text":[{"text":{"content":github_md}}]
+                  }])
+              # notion更新写入github
               else:
-                  with open(file_name, "w", encoding="utf-8") as f:
-                      f.write("# Notion 每日笔记同步\n\n" + notion_text)
-                  print("✅ Notion笔记美观排版同步GitHub完成")
-
-          else:
-              print("📄 两端内容一致，无需重复同步")
+                  with open(file,"w",encoding="utf-8") as f:
+                      f.write("# 笔记整洁同步\n\n"+notion_text)
           EOF
 
-      - name: Git提交归档推送
+      - name: Git提交
         run: |
-          git config --global user.name 笔记同步机器人
-          git config --global user.email sync-bot@github.com
-          git add notion笔记合集.md
-          if git diff --quiet; then
-              echo 无内容变动，跳过提交
-          else
-              git commit -m 【整洁排版】双向笔记自动归档更新
-              git push
-          fi
+          git config user.name 同步机器人
+          git config user.email bot@qq.com
+          git add notion-sync.md
+          if git diff --quiet;then echo 无需提交;else git commit -m整洁排版双向同步;git push;fi
