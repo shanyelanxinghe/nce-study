@@ -1,8 +1,9 @@
-name: Notion双向互通同步
+name: 2026双向-Notion⇄GitHub互通同步
 on:
-  workflow_dispatch
+  workflow_dispatch:
+  push:
   schedule:
-    cron: '0 0 * * *'
+    - cron: '0 0 * * *'
 
 permissions:
   contents: write
@@ -13,48 +14,71 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: install
-        run: pip install notion-client
+      - name: 安装Python环境
+        run: |
+          sudo apt-get update && sudo apt-get install -y python3 python3-pip
 
-      - name: two-way sync
+      - name: 安装Notion官方SDK
+        run: |
+          pip install notion-client
+
+      - name: 双向对比同步核心脚本
         env:
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
           NOTION_PAGE_ID: ${{ secrets.NOTION_PAGE_ID }}
         run: |
-          python3 <<EOF
+          cat > sync.py << 'EOF'
           import os
           from notion_client import Client
-          
-          nt = Client(auth=os.getenv("NOTION_TOKEN"))
-          page_id = os.getenv("NOTION_PAGE_ID")
-          file_name = "notion-sync.md"
-          
-          local_text = ""
-          if os.path.exists(file_name):
-              with open(file_name,"r",encoding="utf-8") as f:
-                  local_text = f.read().replace("# 双向整洁笔记\n\n","").strip()
-          
-          blocks = nt.blocks.children.list(block_id=page_id)["results"]
-          page_text = ""
+
+          api_key = os.getenv('NOTION_TOKEN')
+          page_id = os.getenv('NOTION_PAGE_ID')
+          notion = Client(auth=api_key)
+
+          # 1. 先读取GitHub本地md文件
+          github_md = ""
+          if os.path.exists("notion-sync.md"):
+              with open("notion-sync.md","r",encoding="utf-8") as f:
+                  github_md = f.read()
+
+          # 2. 读取Notion页面内容
+          blocks = notion.blocks.children.list(block_id=page_id).get("results", [])
+          notion_text = ""
           for b in blocks:
-              if b["type"] == "paragraph" and b["paragraph"]["rich_text"]:
-                  page_text += b["paragraph"]["rich_text"][0]["text"]["content"] + "\n\n"
-          page_text = page_text.strip()
-          
-          if local_text != page_text:
-              if len(local_text) > len(page_text):
-                  for item in blocks:
-                      nt.blocks.delete(block_id=item["id"])
-                  nt.blocks.children.append(block_id=page_id,children=[{"type":"paragraph","paragraph":{"rich_text":[{"text":{"content":local_text}}]}})
-              else:
-                  with open(file_name,"w",encoding="utf-8") as f:
-                      f.write("# 双向整洁笔记\n\n"+page_text)
+              if b["type"] == "paragraph":
+                  t = b["paragraph"]["rich_text"][0]["text"]["content"] if b["paragraph"]["rich_text"] else ""
+                  notion_text += t + "\n\n"
+
+          # 3. 双向判断：哪边新就同步哪边
+          # GitHub文件有内容、比notion新 → 写入回Notion
+          if len(github_md) > len(notion_text):
+              # 清空notion原有内容
+              for b in blocks:
+                  notion.blocks.delete(block_id=b["id"])
+              # 把github内容写回notion
+              notion.blocks.children.append(
+                  block_id=page_id,
+                  children=[{"type":"paragraph","paragraph":{"rich_text":[{"type":"text","text":{"content":github_md}}]}}]
+              )
+              print("✅ GitHub修改已同步回Notion")
+
+          # Notion内容更新 → 导出保存到GitHub
+          else:
+              with open("notion-sync.md","w",encoding="utf-8") as f:
+                  f.write("# 双向同步文档\n\n"+notion_text)
+              print("✅ Notion内容已同步到GitHub")
           EOF
 
-      - name: git push
+          python3 sync.py
+
+      - name: Git自动提交推送
         run: |
-          git config user.name syncbot
-          git config user.email bot@qq.com
-          git add notion-sync.md
-          git commit -m update || true
-          git push || true
+          git config --global user.name "Notion Sync Bot"
+          git config --global user.email "bot@users.noreply.github.com"
+          git add .
+          if git diff --cached --quiet; then
+            echo 无变更，跳过提交
+          else
+            git commit -m "双向自动同步更新 $(date +'%Y-%m-%d %H:%M:%S')"
+            git push
+          fi
