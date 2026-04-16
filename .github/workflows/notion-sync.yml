@@ -5,6 +5,10 @@ on:
   schedule:
     - cron: '0 0 * * *'  # 每天UTC凌晨运行（对应北京时间早8点）
 
+# 关键：给Actions写入权限，解决push失败
+permissions:
+  contents: write
+
 jobs:
   sync:
     runs-on: ubuntu-latest
@@ -65,5 +69,10 @@ jobs:
           git config --global user.name "Notion Sync Bot"
           git config --global user.email "bot@users.noreply.github.com"
           git add .
-          git commit -m "2026自动同步: $(date +'%Y-%m-%d %H:%M:%S')" || echo "无更新"
-          git push
+          # 优化：先检查是否有变更，避免空提交报错
+          if git diff --cached --quiet; then
+            echo "无内容更新，跳过提交"
+          else
+            git commit -m "2026自动同步: $(date +'%Y-%m-%d %H:%M:%S')"
+            git push
+          fi
