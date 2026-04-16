@@ -1,26 +1,36 @@
-name: Sync Notion to GitHub
+name: Sync Notion to Markdown
 
 on:
-  workflow_dispatch:
+  workflow_dispatch:  # 手动触发
   schedule:
-    - cron: '0 0 * * *'
+    - cron: '0 20 * * *'  # 每天UTC时间20点（对应凌晨4点）运行，可改
 
 jobs:
-  sync:
+  build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: 检出代码
+        uses: actions/checkout@v4
 
-      - name: Sync Notion
-        uses: tobi-wan-kenobi/notion-to-markdown-action@master
+      - name: 安装Notion导出依赖
+        run: |
+          sudo apt-get update && sudo apt-get install -y wget unzip
+          wget https://github.com/makenotion/notion-cli/releases/latest/download/notion-cli_linux_amd64.zip
+          unzip notion-cli_linux_amd64.zip
+          sudo mv notion /usr/local/bin/
+
+      - name: 导出Notion页面为Markdown
         env:
           NOTION_API_KEY: ${{ secrets.NOTION_API_KEY }}
           NOTION_PAGE_ID: ${{ secrets.NOTION_PAGE_ID }}
-
-      - name: Auto commit
         run: |
-          git config user.name bot
-          git config user.email bot@github.com
+          notion export ${{ secrets.NOTION_PAGE_ID }} --type markdown --output ./
+          mv ${{ secrets.NOTION_PAGE_ID }}.md output.md
+
+      - name: 提交更新
+        run: |
+          git config --global user.name "Notion Sync Bot"
+          git config --global user.email "bot@users.noreply.github.com"
           git add .
-          git commit -m "update" || true
+          git commit -m "Auto-sync: $(date +'%Y-%m-%d %H:%M:%S')" || echo "无更新内容"
           git push
