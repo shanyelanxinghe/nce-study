@@ -19,39 +19,54 @@ jobs:
           sudo apt-get update && sudo apt-get install -y python3 python3-pip
           pip install notion-client
 
-      - name: 写入同步脚本（base64 编码，避免 YAML 语法错误）
+      - name: 全空间自动扫描同步脚本（修复YAML多行缩进）
+        env:
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
         run: |
-          echo "$(cat << 'EOF' | base64 -w0
+          cat > sync_all.py << 'EOF'
 import os
 from notion_client import Client
 
-# 初始化 Notion 客户端
+# 1. 初始化Notion客户端
 api_key = os.getenv('NOTION_TOKEN')
+if not api_key:
+    raise ValueError("请设置 NOTION_TOKEN 环境变量！")
 notion = Client(auth=api_key)
 
-def get_all_accessible_pages():
-    """获取所有你有权限的页面（不限定父子关系）"""
+# 2. 递归获取所有有权限的页面（支持子页面）
+def get_all_pages(parent_id=None):
     pages = []
-    response = notion.search(filter={"property": "object", "value": "page"})
-    for page in response.get("results", []):
-        # 只保留你有权限操作的页面（避免只读共享页）
-        if page.get("parent", {}).get("workspace") or page.get("parent", {}).get("page_id"):
-            pages.append({
-                "id": page["id"],
-                "title": page.get("properties", {}).get("title", {}).get("title", [{}])[0].get("plain_text", "未命名页面")
-            })
+    if parent_id:
+        response = notion.blocks.children.list(parent_id)
+    else:
+        response = notion.search(
+            filter={"value": "page", "property": "object"},
+            page_size=100
+        )
+    for item in response.get('results', []):
+        if item.get('object') == 'page':
+            pages.append(item)
+            # 递归获取子页面（如果有）
+            child_pages = get_all_pages(item['id'])
+            pages.extend(child_pages)
     return pages
 
-# 主逻辑：打印所有页面 ID 和标题
-if __name__ == "__main__":
-    pages = get_all_accessible_pages()
-    print(f"共找到 {len(pages)} 个可操作页面：")
-    for p in pages:
-        print(f"ID: {p['id']} | 标题: {p['title']}")
-EOF
-          )" | base64 -d > sync_all.py
+# 3. 打印所有页面ID和标题（调试用）
+all_pages = get_all_pages()
+print(f"共找到 {len(all_pages)} 个页面：")
+for page in all_pages:
+    title = page.get('properties', {}).get('title', [{}])[0].get('text', {}).get('content', '无标题')
+    print(f"页面ID: {page['id']}, 标题: {title}")
 
+# 4. （可选）同步逻辑：比如把页面内容同步到GitHub仓库
+# 这里仅为示例，需根据需求扩展（如写文件、更新README等）
+with open('notion_pages.md', 'w') as f:
+    f.write("# Notion全空间页面列表\n\n")
+    for page in all_pages:
+        title = page.get('properties', {}).get('title', [{}])[0].get('text', {}).get('content', '无标题')
+        f.write(f"- [{title}](https://www.notion.so/{page['id']})\n")
+
+print("同步完成！页面列表已写入 notion_pages.md")
+EOF
       - name: 运行同步脚本
-        env:
-          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
         run: python3 sync_all.py
