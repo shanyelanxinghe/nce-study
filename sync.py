@@ -1,87 +1,90 @@
 import os
 from notion_client import Client
 
-# ====================== 1. 初始化 Notion 客户端 ======================
 token = os.getenv("NOTION_TOKEN")
 if not token:
     print("❌ 请在 GitHub Secrets 中配置 NOTION_TOKEN！")
     exit(1)
 notion = Client(auth=token)
 
-
-# ====================== 2. 定义所有父页面 ID（从环境变量读取） ======================
-# 你的密钥名称（需和 GitHub Secrets 一致）：
-# - NCE_PAGE_ID → 我的新概念英语(NCE)学习库
-# - WEEKLY_PAGE_ID → Weekly To-do List
-# - DESKTOP_PAGE_ID → 从电脑桌面端开始吧！
-# - MONTHLY_PAGE_ID → Monthly Budget（主预算页面）
-# - INCOME_PAGE_ID → Income (Monthly)（收入子页面）
-# - EXPENSES_PAGE_ID → Expenses (Monthly)（支出子页面）
+# 你配置的 6 个父页面 ID（从环境变量读，和 GitHub Secrets 一一对应）
 PARENT_PAGE_IDS = [
-    os.getenv("NCE_PAGE_ID"),       # 父页面：我的新概念英语(NCE)学习库
-    os.getenv("WEEKLY_PAGE_ID"),    # 父页面：Weekly To-do List
-    os.getenv("DESKTOP_PAGE_ID"),   # 父页面：从电脑桌面端开始吧！
-    os.getenv("MONTHLY_PAGE_ID"),   # 父页面：Monthly Budget（主预算页面）
-    os.getenv("INCOME_PAGE_ID"),    # 父页面：Income (Monthly)（收入子页面）
-    os.getenv("EXPENSES_PAGE_ID"),  # 父页面：Expenses (Monthly)（支出子页面）
+    os.getenv("NCE_PAGE_ID"),       # 我的新概念英语(NCE)学习库
+    os.getenv("WEEKLY_PAGE_ID"),    # Weekly To-do List
+    os.getenv("DESKTOP_PAGE_ID"),   # 从电脑桌面端开始吧！
+    os.getenv("MONTHLY_PAGE_ID"),   # Monthly Budget
+    os.getenv("INCOME_PAGE_ID"),    # Income (Monthly)
+    os.getenv("EXPENSES_PAGE_ID"),  # Expenses (Monthly)
 ]
+PARENT_PAGE_IDS = [pid for pid in PARENT_PAGE_IDS if pid]  # 去掉空值
 
-# 过滤掉未配置的空 ID（防止密钥没配置时出错）
-PARENT_PAGE_IDS = [pid for pid in PARENT_PAGE_IDS if pid]
+# 用一个集合记住“已经处理过的页面 ID”，避免重复同步
+visited_page_ids = set()
 
+def sync_page_content(page_id, page_title):
+    """对单个页面做双向同步（Notion ↔ GitHub）"""
+    global visited_page_ids
+    if page_id in visited_page_ids:
+        print(f"⏭️  跳过已处理页面：{page_title}")
+        return
+    visited_page_ids.add(page_id)
 
-# ====================== 3. 递归遍历页面及其子页面/数据库 ======================
-def traverse_and_sync(page_id, level=0):
-    """
-    递归遍历页面及其子页面/数据库，执行同步逻辑（读取 Notion 内容 → 写入 GitHub md）
-    :param page_id: 当前页面的 ID
-    :param level: 递归层级（用于打印调试信息）
-    """
-    indent = "  " * level  # 缩进，方便调试时区分层级
-    print(f"{indent}🔍 正在同步页面：{page_id}")
+    # 1. 读 Notion 内容（只取 paragraph 文本）
+    blocks = notion.blocks.children.list(block_id=page_id).get("results", [])
+    notion_text = ""
+    for b in blocks:
+        if b["type"] == "paragraph" and b["paragraph"]["rich_text"]:
+            t = b["paragraph"]["rich_text"][0]["text"]["content"]
+            notion_text += t + "\n\n"
 
-    # ---------- 同步当前页面的内容 ----------
+    # 2. 读 GitHub 本地 md（按页面标题+短ID命名，避免重名）
+    safe_title = "".join(c if c.isalnum() or c in (" ", "_") else "_" for c in page_title)
+    filename = f"notion_pages/{safe_title}_{page_id[:8]}.md"
+    github_md = ""
+    if os.path.exists(filename):
+        with open(filename, "r", encoding="utf-8") as f:
+            github_md = f.read()
+
+    # 3. 双向同步：GitHub 新 → 写回 Notion；Notion 新 → 写 GitHub
+    if len(github_md) > len(notion_text):
+        for b in blocks:
+            notion.blocks.delete(block_id=b["id"])
+        notion.blocks.children.append(
+            block_id=page_id,
+            children=[{"type":"paragraph","paragraph":{"rich_text":[{"type":"text","text":{"content":github_md}}]}}]
+        )
+        print(f"📥 [{page_title}] GitHub → Notion")
+    else:
+        os.makedirs("notion_pages", exist_ok=True)
+        with open(filename, "w", encoding="utf-8") as f:
+            f.write(f"# {page_title}\n\n{notion_text}")
+        print(f"📤 [{page_title}] Notion → GitHub")
+
+def traverse_pages(start_page_id, depth=0):
+    """递归遍历页面树，同步当前页 + 子页（带防重）"""
+    if start_page_id in visited_page_ids:
+        return
+    visited_page_ids.add(start_page_id)
+
     try:
-        # 读取 Notion 页面的完整内容
-        page = notion.pages.retrieve(page_id=page_id)
-        print(f"{indent}✅ 页面读取成功：{page['properties'].get('title', [{}])[0].get('text', {}).get('content', '无标题')}")
-        
-        # （可选）将 Notion 内容转换为 Markdown，写入 GitHub 仓库
-        # 示例：提取标题和内容，写入 md 文件
-        title = page["properties"].get("title", [{}])[0].get("text", {}).get("content", "untitled")
-        content = ""  # 这里需要根据 Notion 块结构解析内容（示例简化，实际需处理 blocks）
-        # ... 解析 content 并写入文件的代码 ...
+        page_info = notion.pages.retrieve(page_id=start_page_id)
+        title = page_info.get("properties",{}).get("title",{}).get("title",[{}])[0].get("plain_text","未命名")
+        print(f"{'  '*depth}📄 {title}")
 
-        # 打印同步完成信息
-        print(f"{indent}📝 页面 {title} 同步完成")
+        # 先同步当前页面内容
+        sync_page_content(start_page_id, title)
 
-    except Exception as e:
-        print(f"{indent}❌ 页面 {page_id} 同步失败：{str(e)}")
-
-
-    # ---------- 递归处理子页面和数据库 ----------
-    try:
-        # 获取页面的所有子元素（子页面、数据库、块等）
-        children = notion.blocks.children.list(block_id=page_id)
-        for child in children["results"]:
-            # 判断是否是“子页面”或“数据库”（其他块类型可忽略或扩展处理）
+        # 再递归子页面（child_page）
+        children = notion.blocks.children.list(block_id=start_page_id).get("results", [])
+        for child in children:
             if child["type"] == "child_page":
-                child_page_id = child["id"]
-                traverse_and_sync(child_page_id, level + 1)  # 递归处理子页面
-            elif child["type"] == "child_database":
-                child_db_id = child["id"]
-                traverse_and_sync(child_db_id, level + 1)   # 递归处理数据库（如表格）
-            else:
-                # 其他块类型（如文本、列表、图片等）可按需处理
-                print(f"{indent}⏩ 跳过非页面/数据库块：{child['type']}")
-
+                traverse_pages(child["id"], depth + 1)
     except Exception as e:
-        print(f"{indent}❌ 获取子元素失败（页面 {page_id}）：{str(e)}")
+        print(f"{'  '*depth}❌ {start_page_id} 处理失败：{e}")
 
+# 主流程：遍历你配置的 6 个父页面
+for i, pid in enumerate(PARENT_PAGE_IDS):
+    print(f"\n===== 同步第 {i+1} 个父页面（ID: {pid[:8]}...）=====")
+    traverse_pages(pid)
 
-# ====================== 4. 启动同步（遍历所有父页面） ======================
-for idx, page_id in enumerate(PARENT_PAGE_IDS, 1):
-    print(f"\n===== 第 {idx} 个父页面同步：{page_id} =====")
-    traverse_and_sync(page_id, level=0)
-
-print("\n===== 所有父页面同步完成！ =====")
+print(f"\n✅ 完成，共处理 {len(visited_page_ids)} 个唯一页面（已自动去重）")
