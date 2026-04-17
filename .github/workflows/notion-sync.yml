@@ -1,35 +1,53 @@
-name: Notion ⇄ GitHub 全空间同步
+name: Notion ⇄ GitHub 双向同步
 on:
-  workflow_dispatch:
-  push:
-  schedule:
+  workflow_dispatch:  # 允许手动触发（网页上点 Run workflow）
+  push:               # 代码 push 时触发
+  schedule:           # 定时触发（每天凌晨 0 点）
     - cron: '0 0 * * *'
 
 permissions:
-  contents: write
+  contents: write  # 必须有写权限，才能自动提交文件到仓库
 
 jobs:
   sync:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-latest  # 运行环境：最新版 Ubuntu
     steps:
+      # 1. 拉取仓库代码（包括未提交的修改）
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # 拉取完整历史，避免提交冲突
 
+      # 2. 安装 Python 依赖（notion-client 是 Notion API 的 Python 库）
       - name: 安装依赖
         run: |
           sudo apt-get update
           sudo apt-get install -y python3 python3-pip
           pip install notion-client
 
-      - name: 生成同步脚本（安全写法）
+      # 3. 执行同步脚本（sync.py）
+      - name: 执行同步脚本
+        env:
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}       # Notion 令牌（仓库 Secrets 中配置）
+          NCE_PAGE_ID: ${{ secrets.NCE_PAGE_ID }}         # NCE 页面 ID（仓库 Secrets 中配置）
+          WEEKLY_PAGE_ID: ${{ secrets.WEEKLY_PAGE_ID }}   # Weekly 页面 ID（仓库 Secrets 中配置）
+          DESKTOP_PAGE_ID: ${{ secrets.DESKTOP_PAGE_ID }} # Desktop 页面 ID（仓库 Secrets 中配置）
+          MONTHLY_PAGE_ID: ${{ secrets.MONTHLY_PAGE_ID }} # Monthly 页面 ID（仓库 Secrets 中配置）
+          INCOME_PAGE_ID: ${{ secrets.INCOME_PAGE_ID }}   # Income 页面 ID（仓库 Secrets 中配置）
+          EXPENSES_PAGE_ID: ${{ secrets.EXPENSES_PAGE_ID }} # Expenses 页面 ID（仓库 Secrets 中配置）
+        run: python3 sync.py
+
+      # 4. 【关键】提交并推送生成的文件到仓库
+      - name: 提交并推送同步后的文件
         run: |
-          echo 'import os' > sync_all.py
-          echo 'from notion_client import Client' >> sync_all.py
-          echo '' >> sync_all.py
-          echo 'token = os.getenv("NOTION_TOKEN")' >> sync_all.py
-          echo 'if not token:' >> sync_all.py
-          echo '    print("❌ 请先配置 NOTION_TOKEN")' >> sync_all.py
-          echo '    exit(1)' >> sync_all.py
-          echo 'client = Client(auth=token)' >> sync_all.py
-          echo '' >> sync_all.py
-          echo 'print("✅ 开始同步...")' >> sync_all.py
-          echo 'print("注意：当前脚本仅为模板，需自行完善同步逻辑")' >> sync_all.py
+          # 配置 Git 用户名和邮箱（GitHub Actions 机器人的身份）
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          
+          # 检查是否有文件变动（比如新增了 md 文件）
+          if [[ -n $(git status --porcelain) ]]; then
+            git add notion_pages/  # 添加所有生成的 md 文件
+            git commit -m "🤖 自动同步 Notion 内容到 GitHub"  # 提交
+            git push origin main  # 推送到 main 分支（如果你的分支是 master，改这里）
+          else
+            echo "没有文件变动，跳过提交"
+          fi
