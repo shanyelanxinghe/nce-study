@@ -1,0 +1,35 @@
+name: Notion ⇄ GitHub 全空间同步
+on:
+  workflow_dispatch:
+  push:
+  schedule:
+    - cron: '0 0 * * *'
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3 python3-pip
+          pip install notion-client
+
+      - name: 生成同步脚本（安全写法）
+        run: |
+          echo 'import os' > sync_all.py
+          echo 'from notion_client import Client' >> sync_all.py
+          echo '' >> sync_all.py
+          echo 'token = os.getenv("NOTION_TOKEN")' >> sync_all.py
+          echo 'if not token:' >> sync_all.py
+          echo '    print("❌ 请先配置 NOTION_TOKEN")' >> sync_all.py
+          echo '    exit(1)' >> sync_all.py
+          echo 'client = Client(auth=token)' >> sync_all.py
+          echo '' >> sync_all.py
+          echo 'print("✅ 开始同步...")' >> sync_all.py
+          echo 'print("注意：当前脚本仅为模板，需自行完善同步逻辑")' >> sync_all.py
