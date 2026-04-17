@@ -19,54 +19,23 @@ jobs:
           sudo apt-get update && sudo apt-get install -y python3 python3-pip
           pip install notion-client
 
-      - name: 全空间自动扫描同步脚本（修复YAML多行缩进）
+      - name: 写入同步脚本（Base64编码，彻底避坑）
+        run: |
+          echo "aW1wb3J0IG9zDQpmcm9tIG5vdGlvbl9jbGllbnQgaW1wb3J0IENsaWVudA0KDQphcGlfa2V5ID0gb3MuZ2V0ZW52KCdOT1RJT05fVE9LRU4nKQ0KaWYgbm90IGFwaV9rZXk6DQogICAgcmFpc2UgVmFsdWVFcnJvcigi6L+b6KGM6YCJ5oupIE5PVElPTl9UT0tFTuWHveaVsCIpDQpub3Rpb24gPSBDbGllbnQoYXV0aD1hcGlfa2V5KQ0KDQpkZWYgc2Nhbl9hbGxfcGFnZXMoKToNCiAgICAic2NhbiB5b3VyIHdvcmtzcGFjZSBmb3IgYWxsIGFjY2Vzc2libGUgcGFnZXMiDQogICAgcGFnZXMgPSBbXQ0KICAgICMgaHR0cHM6Ly9kZXZlbG9wZXJzLm5vdGlvbmguY29tL3JlZi9zZWFyY2gNCiAgICByZXN1bHRzID0gbm90aW9uLnNlYXJjaChmaWx0ZXI9eyJwcm9wZXJ0eSI6ICJvYmplY3QiLCAidmFsdWUiOiAicGFnZSJ9LCBwYWdlX3NpemU9MTAwKS5nZXQoInJlc3VsdHMiLCBbXSkNCiAgICBmb3IgcGFnZSBpbiByZXN1bHRzOg0KICAgICAgICAjIOafpeivouacquWPkeW4g+aWh+S7tu+8jOS4jeWAmeawtOa3u+WkhOeEoeazleaUtuiAhQ0KICAgICAgICBpZiBwYWdlLmdldCgicGFyZW50Iiwge30pLmdldCgid29ya3NwYWNlIikgb3IgcGFnZS5nZXQoInBhcmVudCIsIHt9KS5nZXQoInBhZ2VfaWQiKToNCiAgICAgICAgICAgIHRpdGxlID0gcGFnZVsiUHJvcGVydGllcyJdWyJUaXRsZSJdWyJ0aXRsZSJdWzBdWyJwbGFpbl90ZXh0Il0gaWYgcGFnZVsiUHJvcGVydGllcyJdWyJUaXRsZSJdWyJ0aXRsZSJdIGVsc2UgIue7neWvueexsyINCiAgICAgICAgICAgIHBhZ2VzLmFwcGVuZCh7ImkiZDogcGFnZVsiaWQiXSwgInRpdGxlIjogdGl0bGV9KQ0KICAgIHJldHVybiBwYWdlcw0KDQppZiBfX25hbWVfXyA9PSAiX19tYWluX18iOg0KICAgIHBhZ2VzID0gc2Nhbl9hbGxfcGFnZXMoKQ0KICAgIHByaW50KGYi57G75Yy76ZmN5Li65pys56qBIFtsZW4ocGFnZXMpXSDkuKrlnLDlpJrmnaXnmoTpuKHpqow6IikNCiAgICBmb3IgcCBpbiBwYWdlczoNCiAgICAgICAgcHJpbnRmKCLimqQgJXM6ICVzXG4iLCBwWyJpZCJdLCBwWyJ0aXRsZSJdKQ==" | base64 -d > sync_all.py
+
+      - name: 执行同步脚本
         env:
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
-        run: |
-          cat > sync_all.py << 'EOF'
-import os
-from notion_client import Client
-
-# 1. 初始化Notion客户端
-api_key = os.getenv('NOTION_TOKEN')
-if not api_key:
-    raise ValueError("请设置 NOTION_TOKEN 环境变量！")
-notion = Client(auth=api_key)
-
-# 2. 递归获取所有有权限的页面（支持子页面）
-def get_all_pages(parent_id=None):
-    pages = []
-    if parent_id:
-        response = notion.blocks.children.list(parent_id)
-    else:
-        response = notion.search(
-            filter={"value": "page", "property": "object"},
-            page_size=100
-        )
-    for item in response.get('results', []):
-        if item.get('object') == 'page':
-            pages.append(item)
-            # 递归获取子页面（如果有）
-            child_pages = get_all_pages(item['id'])
-            pages.extend(child_pages)
-    return pages
-
-# 3. 打印所有页面ID和标题（调试用）
-all_pages = get_all_pages()
-print(f"共找到 {len(all_pages)} 个页面：")
-for page in all_pages:
-    title = page.get('properties', {}).get('title', [{}])[0].get('text', {}).get('content', '无标题')
-    print(f"页面ID: {page['id']}, 标题: {title}")
-
-# 4. （可选）同步逻辑：比如把页面内容同步到GitHub仓库
-# 这里仅为示例，需根据需求扩展（如写文件、更新README等）
-with open('notion_pages.md', 'w') as f:
-    f.write("# Notion全空间页面列表\n\n")
-    for page in all_pages:
-        title = page.get('properties', {}).get('title', [{}])[0].get('text', {}).get('content', '无标题')
-        f.write(f"- [{title}](https://www.notion.so/{page['id']})\n")
-
-print("同步完成！页面列表已写入 notion_pages.md")
-EOF
-      - name: 运行同步脚本
         run: python3 sync_all.py
+
+      - name: Git提交
+        run: |
+          git config --global user.name "Notion Sync Bot"
+          git config --global user.email "bot@users.noreply.github.com"
+          git add .
+          if git diff --cached --quiet; then
+            echo "无变更，跳过提交"
+          else
+            git commit -m "全空间扫描完成 $(date +'%Y-%m-%d %H:%M:%S')"
+            git push
+          fi
