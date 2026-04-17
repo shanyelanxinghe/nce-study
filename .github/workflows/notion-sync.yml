@@ -22,74 +22,69 @@ jobs:
       - name: 全空间自动扫描同步脚本
         env:
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
-          # 保留你原来的页面 ID，用于兼容旧逻辑（可选，可不删）
-          NOTION_PAGE_ID: ${{ secrets.NOTION_PAGE_ID }}
         run: |
           cat > sync_all.py << 'EOF'
-          import os
-          import json
-          from notion_client import Client
+import os
+from notion_client import Client
 
-          notion = Client(auth=os.getenv('NOTION_TOKEN'))
+api_key = os.getenv('NOTION_TOKEN')
+notion = Client(auth=api_key)
 
-          def get_all_accessible_pages():
-              """获取所有你有权限访问的页面（包括独立页面）"""
-              pages = []
-              # 使用 search 接口，过滤出所有页面
-              results = notion.search(filter={"property": "object", "value": "page"}).get("results", [])
-              for page in results:
-                  # 只取你有权限的页面（Integration 可访问）
-                  if page.get("parent", {}).get("workspace") or page.get("parent", {}).get("page_id"):
-                      title = page.get("properties", {}).get("title", {}).get("title", [{}])[0].get("plain_text", "未命名页面")
-                      pages.append({
-                          "id": page["id"],
-                          "title": title
-                      })
-              return pages
+def get_all_accessible_pages():
+    """获取所有你有权限的页面（不限定父子关系）"""
+    pages = []
+    results = notion.search(filter={"property": "object", "value": "page"}).get("results", [])
+    for page in results:
+        title = page.get("properties", {}).get("title", {}).get("title", [{}])[0].get("plain_text", "未命名页面")
+        pages.append({
+            "id": page["id"],
+            "title": title
+        })
+    return pages
 
-          def sync_page(page_id, title):
-              """同步单个页面：读取 Notion → 写入 GitHub；或反向"""
-              # 1. 读取 GitHub 本地文件（按页面标题命名）
-              filename = f"notion-{title.replace('/', '_').replace(' ', '-')}.md"
-              github_md = ""
-              if os.path.exists(filename):
-                  with open(filename, "r", encoding="utf-8") as f:
-                      github_md = f.read()
+def sync_page(page_id, title):
+    """同步单个页面内容到 GitHub"""
+    blocks = notion.blocks.children.list(block_id=page_id).get("results", [])
+    notion_text = ""
+    for b in blocks:
+        if b["type"] == "paragraph":
+            rich_text = b["paragraph"].get("rich_text", [])
+            if rich_text:
+                t = rich_text[0].get("text", {}).get("content", "")
+                notion_text += t + "\n\n"
 
-              # 2. 读取 Notion 页面内容
-              blocks = notion.blocks.children.list(block_id=page_id).get("results", [])
-              notion_text = ""
-              for b in blocks:
-                  if b["type"] == "paragraph":
-                      t = b["paragraph"]["rich_text"][0]["text"]["content"] if b["paragraph"]["rich_text"] else ""
-                      notion_text += t + "\n\n"
+    # 保存到 GitHub 的 md 文件
+    filename = f"{title.replace('/', '_').replace(' ', '_')}.md"
+    github_md = ""
+    if os.path.exists(filename):
+        with open(filename, "r", encoding="utf-8") as f:
+            github_md = f.read()
 
-              # . 双向判断：哪边新就同步哪边
-        3      if len(github_md) > len(notion_text):
-                  # GitHub 更新 → 同步回 Notion
-                  # 清空原内容
-                  for b in blocks:
-                      notion.blocks.delete(block_id=b["id"])
-                  # 写入 GitHub 内容
-                  notion.blocks.children.append(
-                      block_id=page_id,
-                      children=[{"type":"paragraph","paragraph":{"rich_text":[{"type":"text","text":{"content":github_md}}]}}]
-                  )
-                  print(f"✅ GitHub修改已同步回Notion: {title}")
-              else:
-                  # Notion 更新 → 同步到 GitHub
-                  with open(filename, "w", encoding="utf-8") as f:
-                      f.write(f"# {title}\n\n{notion_text}")
-                  print(f"✅ Notion内容已同步到GitHub: {title}")
+    # 双向同步逻辑
+    if len(github_md) > len(notion_text):
+        # GitHub 有新内容 → 同步回 Notion
+        for b in blocks:
+            notion.blocks.delete(block_id=b["id"])
+        notion.blocks.children.append(
+            block_id=page_id,
+            children=[{"type": "paragraph", "paragraph": {"rich_text": [{"type": "text", "text": {"content": github_md}}]}}]
+        )
+        print(f"✅ {title}：GitHub修改已同步回Notion")
+    else:
+        # Notion 有新内容 → 导出到 GitHub
+        with open(filename, "w", encoding="utf-8") as f:
+            f.write(f"# {title}\n\n{notion_text}")
+        print(f"✅ {title}：Notion内容已同步到GitHub")
 
-          # 主程序
-          all_pages = get_all_accessible_pages()
-          print(f"🔍 发现 {len(all_pages)} 个可同步页面:")
-          for p in all_pages:
-              print(f"  - {p['title']} ({p['id']})")
-              sync_page(p['id'], p['title'])
+# 主程序
+if __name__ == "__main__":
+    all_pages = get_all_accessible_pages()
+    print(f"🔍 找到 {len(all_pages)} 个可同步页面")
+    for page in all_pages:
+        print(f"📄 正在同步：{page['title']} ({page['id']})")
+        sync_page(page["id"], page["title"])
 
-          EOF
+EOF
 
           python3 sync_all.py
 
@@ -99,7 +94,7 @@ jobs:
           git config --global user.email "bot@users.noreply.github.com"
           git add .
           if git diff --cached --quiet; then
-            echo 无变更，跳过提交
+            echo "无变更，跳过"提交
           else
             git commit -m "双向自动同步更新 $(date +'%Y-%m-%d %H:%M:%S')"
             git push
