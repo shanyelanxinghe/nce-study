@@ -3,143 +3,55 @@ on:
   workflow_dispatch:
   push:
   schedule:
-    - cron: '0 0 * * *'  # 每天凌晨0点同步
+    - cron: '0 0 * * *'
 
 permissions:
-  contents: write  # 允许写入仓库
+  contents: write
 
 jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4  # 拉取仓库代码
+      - uses: actions/checkout@v4
 
       - name: 安装依赖
         run: |
           sudo apt-get update && sudo apt-get install -y python3 python3-pip
-          pip install notion-client  # 安装Notion官方SDK
+          pip install notion-client
 
-      - name: 生成全空间同步脚本
+      - name: 写入同步脚本（base64 编码，避免 YAML 语法错误）
         run: |
-          cat > sync_all.py << 'EOF'
+          echo "$(cat << 'EOF' | base64 -w0
 import os
 from notion_client import Client
 
-# 1. 初始化Notion客户端
-api_key = os.getenv("NOTION_TOKEN")
-if not api_key:
-    raise ValueError("请在Secrets中配置NOTION_TOKEN！")
+# 初始化 Notion 客户端
+api_key = os.getenv('NOTION_TOKEN')
 notion = Client(auth=api_key)
 
-# 2. 搜索所有你有权限的页面（不限制父子关系）
 def get_all_accessible_pages():
-    all_pages = []
-    # Notion搜索接口：筛选所有“页面”类型的对象
+    """获取所有你有权限的页面（不限定父子关系）"""
+    pages = []
     response = notion.search(filter={"property": "object", "value": "page"})
     for page in response.get("results", []):
-        # 提取页面ID和标题（优先取title属性，否则用未命名）
-        title = page.get("properties", {}).get("title", {}).get("title", [{}])[0].get("plain_text", "未命名页面")
-        all_pages.append({
-            "id": page["id"],
-            "title": title
-        })
-    return all_pages
+        # 只保留你有权限操作的页面（避免只读共享页）
+        if page.get("parent", {}).get("workspace") or page.get("parent", {}).get("page_id"):
+            pages.append({
+                "id": page["id"],
+                "title": page.get("properties", {}).get("title", {}).get("title", [{}])[0].get("plain_text", "未命名页面")
+            })
+    return pages
 
-# 3. 递归遍历页面的子页面（可选，如需深度扫描）
-def get_children_recursive(parent_id, pages_list):
-    try:
-        children = notion.blocks.children.list(block_id=parent_id).get("results", [])
-        for child in children:
-            if child["type"] == "page":
-                title = child.get("properties", {}).get("title", {}).get("title", [{}])[0].get("plain_text", "未命名子页")
-                pages_list.append({
-                    "id": child["id"],
-                    "title": title
-                })
-                # 递归扫描子页面的子页面
-                get_children_recursive(child["id"], pages_list)
-    except Exception as e:
-        print(f"扫描子页面失败（{parent_id}）: {e}")
-
-# 4. 双向同步逻辑：GitHub ↔ Notion
-def sync_page(page_id, page_title):
-    # 读取GitHub上的本地文件（按页面标题命名）
-    local_md_path = f"{page_title}.md"
-    github_content = ""
-    if os.path.exists(local_md_path):
-        with open(local_md_path, "r", encoding="utf-8") as f:
-            github_content = f.read()
-
-    # 读取Notion页面的内容（提取所有段落文本）
-    notion_blocks = notion.blocks.children.list(block_id=page_id).get("results", [])
-    notion_text = ""
-    for block in notion_blocks:
-        if block["type"] == "paragraph":
-            rich_text = block["paragraph"].get("rich_text", [])
-            if rich_text:
-                notion_text += rich_text[0]["text"]["content"] + "\n\n"
-
-    # 双向判断：哪边新就同步哪边
-    if len(github_content) > len(notion_text):
-        # GitHub内容更新 → 同步回Notion
-        # 先删除原有块
-        for block in notion_blocks:
-            notion.blocks.delete(block_id=block["id"])
-        # 写入GitHub内容到Notion
-        notion.blocks.children.append(
-            block_id=page_id,
-            children=[
-                {"type": "paragraph", "paragraph": {"rich_text": [{"type": "text", "text": {"content": github_content}}]}}
-            ]
-        )
-        print(f"✅ GitHub修改已同步回Notion：{page_title}")
-    else:
-        # Notion内容更新 → 同步到GitHub
-        with open(local_md_path, "w", encoding="utf-8") as f:
-            f.write(f"# {page_title}\n\n{notion_text}")
-        print(f"✅ Notion内容已同步到GitHub：{page_title}")
-
-# 5. 主流程：遍历所有页面并同步
+# 主逻辑：打印所有页面 ID 和标题
 if __name__ == "__main__":
-    # 1. 获取所有有权限的页面
-    all_pages = get_all_accessible_pages()
-    print(f"找到 {len(all_pages)} 个可同步页面：{[p['title'] for p in all_pages]}")
-
-    # 2. （可选）递归扫描所有子页面
-    all_pages_with_children = []
-    for page in all_pages:
-        all_pages_with_children.append(page)
-        get_children_recursive(page["id"], all_pages_with_children)
-
-    # 去重（避免递归导致的重复）
-    unique_pages = {}
-    for page in all_pages_with_children:
-        unique_pages[page["id"]] = page
-    unique_pages_list = list(unique_pages.values())
-    print(f"递归扫描后，共 {len(unique_pages_list)} 个唯一页面")
-
-    # 3. 逐个同步页面
-    for page in unique_pages_list:
-        try:
-            sync_page(page["id"], page["title"])
-        except Exception as e:
-            print(f"同步页面 {page['title']} 失败：{e}")
+    pages = get_all_accessible_pages()
+    print(f"共找到 {len(pages)} 个可操作页面：")
+    for p in pages:
+        print(f"ID: {p['id']} | 标题: {p['title']}")
 EOF
+          )" | base64 -d > sync_all.py
 
-      - name: 执行同步脚本
+      - name: 运行同步脚本
         env:
-          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}  # 从Secrets读取Notion令牌
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
         run: python3 sync_all.py
-
-      - name: Git提交GitHub变更
-        run: |
-          git config --global user.name "Notion Sync Bot"
-          git config --global user.email "bot@users.noreply.github.com"
-          git add .  # 添加所有Markdown文件
-          # 如果有变更则提交
-          if ! git diff --cached --quiet; then
-            git commit -m "双向同步更新 $(date +'%Y-%m-%d %H:%M:%S')"
-            git push
-          else
-            echo "无变更，跳过提交"
-          fi
