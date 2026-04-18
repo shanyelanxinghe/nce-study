@@ -22,25 +22,11 @@ jobs:
           sudo apt-get install -y python3 python3-pip
           pip install notion-client
 
-      - name: 运行同步脚本
+      - name: 运行同步脚本（内含 Git 提交）
         env:
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
-          NOTION_PAGE_ID: ${{ secrets.NOTION_PAGE_ID }}       # 对应你的 NOTION_PAGE_ID
-          WEEKLY_PAGE_ID: ${{ secrets.WEEKLY_PAGE_ID }}       # 对应你的 WEEKLY_PAGE_ID
-          DESKTOP_PAGE_ID: ${{ secrets.DESKTOP_PAGE_ID }}      # 对应你的 DESKTOP_PAGE_ID
-          MONTHLY_PAGE_ID: ${{ secrets.MONTHLY_PAGE_ID }}      # 对应你的 MONTHLY_PAGE_ID
-          # 你仓库没有 INCOME_PAGE_ID / EXPENSES_PAGE_ID，已移除
+          NOTION_PAGE_ID: ${{ secrets.NOTION_PAGE_ID }}
+          WEEKLY_PAGE_ID: ${{ secrets.WEEKLY_PAGE_ID }}
+          DESKTOP_PAGE_ID: ${{ secrets.DESKTOP_PAGE_ID }}
+          MONTHLY_PAGE_ID: ${{ secrets.MONTHLY_PAGE_ID }}
         run: python3 sync.py
-
-      - name: 提交生成的 MD 文件
-        run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add notion_pages/
-          if git diff --cached --quiet; then
-            echo "🟢 无变更，跳过提交"
-          else
-            git commit -m "🔄 Auto-Sync: Update notion_pages"
-            git push origin main
-            echo "✅ 已推送 notion_pages/ 到仓库"
-          fi
