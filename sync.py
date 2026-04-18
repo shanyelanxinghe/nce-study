@@ -2,8 +2,8 @@ import os
 import re
 from notion_client import Client
 
-# ====================== 1. 初始化 & 目录创建 ======================
-os.makedirs("notion_pages", exist_ok=True)
+# ====================== 1. 自动创建目录（仓库根目录下） ======================
+os.makedirs("notion_pages", exist_ok=True)  # 你要的目录，自动创建
 
 token = os.getenv("NOTION_TOKEN")
 if not token:
@@ -11,111 +11,79 @@ if not token:
     exit(1)
 notion = Client(auth=token)
 
-# ====================== 2. 6 个父页面 ID（从环境变量读） ======================
+# ====================== 2. 5 个父页面 ID（对应你的 Secrets） ======================
 PARENT_PAGE_IDS = [
-    os.getenv("NCE_PAGE_ID"),
+    os.getenv("NOTION_PAGE_ID"),       # 原 NCE_PAGE_ID 替换为 NOTION_PAGE_ID
     os.getenv("WEEKLY_PAGE_ID"),
     os.getenv("DESKTOP_PAGE_ID"),
     os.getenv("MONTHLY_PAGE_ID"),
-    os.getenv("INCOME_PAGE_ID"),
-    os.getenv("EXPENSES_PAGE_ID"),
+    # 注意：你截图中没有 INCOME_PAGE_ID / EXPENSES_PAGE_ID，所以删掉了
 ]
-PARENT_PAGE_IDS = [pid for pid in PARENT_PAGE_IDS if pid and len(pid) == 32]  # 过滤空/非法ID
+PARENT_PAGE_IDS = [pid for pid in PARENT_PAGE_IDS if pid and len(pid) == 32]  # 过滤空值和无效长度
 
 visited_page_ids = set()
 
-# ====================== 3. 工具函数：安全文件名 & 提取标题 ======================
+# ====================== 3. 安全文件名 & 取标题 ======================
 def safe_filename(title, max_len=60):
-    """把标题转成安全文件名（去特殊字符、截断）"""
-    safe = re.sub(r'[<>:"/\\|?*]', '_', title)  # 替换所有非法字符
-    safe = re.sub(r'\s+', '_', safe).strip('_.')
-    return safe[:max_len] if len(safe) > max_len else safe
+    safe = re.sub(r'[<>:"/\\|?*]', '_', title)
+    safe = re.sub(r'\s+', '_', safe).strip('_')
+    return safe[:max_len]
 
-def get_page_title(page_info):
-    """优先从 properties.title 取标题，否则取首段文本"""
-    title_prop = page_info.get("properties", {}).get("title", {})
-    if isinstance(title_prop, dict) and title_prop.get("title", []):
-        return title_prop["title"][0].get("plain_text", "未命名")
-    # 兜底：取首段文本
-    blocks = notion.blocks.children.list(block_id=page_info["id"]).get("results", [])
-    for b in blocks:
-        if b["type"] == "paragraph" and b["paragraph"].get("rich_text"):
-            return b["paragraph"]["rich_text"][0]["text"]["content"]
-    return "未命名"
-
-# ====================== 4. 核心：单个页面双向同步 ======================
-def sync_page_content(page_id, page_title):
+# ====================== 4. 递归同步页面（深度优先） ======================
+def sync_page(page_id, parent_title=""):
     if page_id in visited_page_ids:
+        print(f"⚠️ 跳过已同步页面: {page_id}")
         return
     visited_page_ids.add(page_id)
 
-    # 1. 读 Notion 内容（段落 + 标题）
-    blocks = notion.blocks.children.list(block_id=page_id).get("results", [])
-    notion_text = f"# {page_title}\n\n"
-    for b in blocks:
-        if b["type"] in ["paragraph", "heading_1", "heading_2"]:
-            rich_text = b[b["type"]].get("rich_text", [])
-            if rich_text:
-                line = rich_text[0]["text"]["content"]
-                if b["type"] == "heading_1": line = f"# {line}"
-                if b["type"] == "heading_2": line = f"## {line}"
-                notion_text += line + "\n\n"
-
-    # 2. 写/读 GitHub MD（文件名带 ID 防冲突）
-    safe_title = safe_filename(page_title)
-    filename = f"notion_pages/{safe_title}_{page_id[:8]}.md"
-    github_md = ""
-    if os.path.exists(filename):
-        with open(filename, "r", encoding="utf-8") as f:
-            github_md = f.read()
-
-    # 3. 双向判断（按长度简化，也可改哈希比对）
-    if len(github_md) > len(notion_text):  # GitHub 更新 → 写回 Notion
-        # 先清空 Notion 页所有块（避免重复）
-        for b in blocks:
-            notion.blocks.delete(block_id=b["id"])
-        # 写入 GitHub 内容（分段插入更稳）
-        lines = github_md.split('\n')
-        batch = []
-        for line in lines:
-            if line.strip():
-                batch.append({
-                    "type": "paragraph",
-                    "paragraph": {"rich_text": [{"type": "text", "text": {"content": line}}]}
-                })
-        if batch:
-            notion.blocks.children.append(block_id=page_id, children=batch)
-        print(f"📥 [{page_title}] GitHub → Notion（已覆盖）")
-    else:  # Notion 更新 → 写 GitHub
-        with open(filename, "w", encoding="utf-8") as f:
-            f.write(notion_text)
-        print(f"📤 [{page_title}] Notion → GitHub → {filename}")
-
-# ====================== 5. 递归遍历子页 ======================
-def traverse_pages(start_page_id, depth=0):
-    if start_page_id in visited_page_ids:
-        return
-    visited_page_ids.add(start_page_id)
     try:
-        page_info = notion.pages.retrieve(page_id=start_page_id)
-        title = get_page_title(page_info)
-        print(f"{'  '*depth}📄 {title} ({start_page_id[:8]})")
-        sync_page_content(start_page_id, title)
-        # 递归子页
-        children = notion.blocks.children.list(block_id=start_page_id).get("results", [])
-        for child in children:
-            if child["type"] == "child_page":
-                traverse_pages(child["id"], depth + 1)
+        page = notion.pages.retrieve(page_id)
     except Exception as e:
-        print(f"{'  '*depth}❌ {start_page_id[:8]} 失败: {str(e)[:100]}")
+        print(f"❌ 获取页面失败 (ID: {page_id}): {e}")
+        return
 
-# ====================== 6. 主入口 ======================
-if __name__ == "__main__":
-    print("🚀 开始多父页面递归同步（防重/安全文件名/双向）...")
-    if not PARENT_PAGE_IDS:
-        print("❌ 未配置有效的父页面 ID，请检查 GitHub Secrets")
-        exit(1)
-    for i, pid in enumerate(PARENT_PAGE_IDS):
-        print(f"\n===== 同步父页面 {i+1}/{len(PARENT_PAGE_IDS)} (ID: {pid[:8]}) =====")
-        traverse_pages(pid)
-    print(f"\n✅ 完成！共处理 {len(visited_page_ids)} 个唯一页面")
+    # 提取页面标题
+    title = "未命名页面"
+    if "properties" in page and "title" in page["properties"] and page["properties"]["title"]["title"]:
+        title = page["properties"]["title"]["title"][0]["text"]["content"]
+    if parent_title:
+        title = f"{parent_title}_{title}"  # 父子页面标题拼接
+
+    filename = safe_filename(title)
+    filepath = f"notion_pages/{filename}.md"
+
+    # 提取页面内容（简化版，可根据 Notion API 文档完善）
+    content = ""
+    if "blocks" in page:
+        for block in page["blocks"]:
+            block_type = block["type"]
+            if block_type == "paragraph":
+                text = block["paragraph"]["rich_text"][0]["text"]["content"] if block["paragraph"]["rich_text"] else ""
+                content += f"{text}\n\n"
+            elif block_type == "heading_1":
+                text = block["heading_1"]["rich_text"][0]["text"]["content"] if block["heading_1"]["rich_text"] else ""
+                content += f"# {text}\n\n"
+            elif block_type == "heading_2":
+                text = block["heading_2"]["rich_text"][0]["text"]["content"] if block["heading_2"]["rich_text"] else ""
+                content += f"## {text}\n\n"
+            # 可扩展更多块类型（列表、代码块等）
+
+    # 写入 MD 文件
+    with open(filepath, "w", encoding="utf-8") as f:
+        f.write(f"# {title}\n\n{content}")
+
+    print(f"✅ 已同步: {title} -> {filepath}")
+
+    # 递归同步子页面（如果有）
+    if "children" in page:
+        for child in page["children"]:
+            child_id = child["id"]
+            sync_page(child_id, title)
+
+# ====================== 5. 开始同步所有父页面 ======================
+print(f"开始多父页面递归同步（共 {len(PARENT_PAGE_IDS)} 个父页面）...")
+for i, pid in enumerate(PARENT_PAGE_IDS, 1):
+    print(f"\n====== 同步父页面 {i}/{len(PARENT_PAGE_IDS)} (ID: {pid}) ======")
+    sync_page(pid)
+
+print(f"\n完成！共处理 {len(visited_page_ids)} 个唯一页面")
