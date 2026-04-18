@@ -25,12 +25,11 @@ jobs:
       - name: 运行同步脚本
         env:
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
-          NCE_PAGE_ID: ${{ secrets.NCE_PAGE_ID }}
-          WEEKLY_PAGE_ID: ${{ secrets.WEEKLY_PAGE_ID }}
-          DESKTOP_PAGE_ID: ${{ secrets.DESKTOP_PAGE_ID }}
-          MONTHLY_PAGE_ID: ${{ secrets.MONTHLY_PAGE_ID }}
-          INCOME_PAGE_ID: ${{ secrets.INCOME_PAGE_ID }}
-          EXPENSES_PAGE_ID: ${{ secrets.EXPENSES_PAGE_ID }}
+          NOTION_PAGE_ID: ${{ secrets.NOTION_PAGE_ID }}       # 对应你的 NOTION_PAGE_ID
+          WEEKLY_PAGE_ID: ${{ secrets.WEEKLY_PAGE_ID }}       # 对应你的 WEEKLY_PAGE_ID
+          DESKTOP_PAGE_ID: ${{ secrets.DESKTOP_PAGE_ID }}      # 对应你的 DESKTOP_PAGE_ID
+          MONTHLY_PAGE_ID: ${{ secrets.MONTHLY_PAGE_ID }}      # 对应你的 MONTHLY_PAGE_ID
+          # 你仓库没有 INCOME_PAGE_ID / EXPENSES_PAGE_ID，已移除
         run: python3 sync.py
 
       - name: 提交生成的 MD 文件
@@ -43,5 +42,5 @@ jobs:
           else
             git commit -m "🔄 Auto-Sync: Update notion_pages"
             git push origin main
-            echo "✅ 已推送新文件到仓库"
+            echo "✅ 已推送 notion_pages/ 到仓库"
           fi
