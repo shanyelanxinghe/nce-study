@@ -1,25 +1,25 @@
 name: Notion ⇄ GitHub 双向同步
 on:
-  schedule:
-    - cron: "0 * * * *"  # 每小时自动同步一次（可选，也可以保留手动触发）
+  workflow_dispatch:
   push:
-    branches: [ main ]  # 代码push到main时触发（可选）
-  workflow_dispatch:    # 允许手动触发
+  schedule:
+    - cron: '0 0 * * *'
+
+permissions:
+  contents: write
 
 jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
-      - name: 检出仓库
-        uses: actions/checkout@v3
-
-      - name: 设置 Python 环境
-        uses: actions/setup-python@v4
+      - uses: actions/checkout@v4
         with:
-          python-version: "3.10"
+          fetch-depth: 0
 
       - name: 安装依赖
         run: |
+          sudo apt-get update
+          sudo apt-get install -y python3 python3-pip
           pip install notion-client
 
       - name: 运行同步脚本
@@ -31,12 +31,17 @@ jobs:
           MONTHLY_PAGE_ID: ${{ secrets.MONTHLY_PAGE_ID }}
           INCOME_PAGE_ID: ${{ secrets.INCOME_PAGE_ID }}
           EXPENSES_PAGE_ID: ${{ secrets.EXPENSES_PAGE_ID }}
-        run: python sync.py
+        run: python3 sync.py
 
-      - name: 配置 Git 并提交文件
+      - name: 提交生成的 MD 文件
         run: |
-          git config --global user.name "GitHub Actions"
-          git config --global user.email "actions@github.com"
-          git add .
-          git commit -m "自动同步 Notion 内容生成 MD 文件" || echo "没有文件变化"
-          git push origin main
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add notion_pages/
+          if git diff --cached --quiet; then
+            echo "🟢 无变更，跳过提交"
+          else
+            git commit -m "🔄 Auto-Sync: Update notion_pages"
+            git push origin main
+            echo "✅ 已推送新文件到仓库"
+          fi
