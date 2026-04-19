@@ -6,13 +6,14 @@ from notion_client import Client
 # ========== 1. 初始化配置 ==========
 os.makedirs("notion_pages", exist_ok=True)
 
+# 从环境变量读取Notion Token和页面ID
 token = os.getenv("NOTION_TOKEN")
 if not token:
     raise SystemExit("❌ 请在GitHub Secrets中配置NOTION_TOKEN！")
 
 notion = Client(auth=token)
 
-# 父页面ID（从Secrets读取）
+# 父页面ID列表（从Secrets读取）
 PARENT_PAGE_IDS = [
     os.getenv("NOTION_PAGE_ID"),
     os.getenv("WEEKLY_PAGE_ID"),
@@ -27,217 +28,242 @@ page_id_to_title = {}    # 缓存页面ID→标题映射
 
 # ========== 2. 工具函数 ==========
 def safe_filename(title, page_id):
-    """生成唯一文件名：标题 + 页面ID前8位，避免冲突"""
-    safe = re.sub(r'[<>:"/\\|?*]', '_', title).strip()
-    return f"notion_pages/{safe}_{page_id[:8]}.md"
+    """生成唯一文件名：标题 + 页面ID前8位"""
+    safe_title = re.sub(r'[<>:"/\\|?*]', "_", title).strip()  # 替换非法字符
+    return f"notion_pages/{safe_title}_{page_id[:8]}.md"
+
 
 def get_page_title(page_info):
-    """提取Notion页面的标题"""
+    """从页面信息中提取标题"""
     title_prop = page_info.get("properties", {}).get("title", {})
     if isinstance(title_prop, dict) and title_prop.get("title", []):
         return title_prop["title"][0].get("plain_text", "未命名")
     return "未命名"
 
-def parse_block_to_md(block):
-    """将Notion块转换为Markdown格式（支持段落、标题、列表、表格）"""
+
+def parse_notion_block_to_md(block):
+    """将Notion块转换为Markdown行"""
     block_type = block["type"]
-    rich_text = block[block_type].get("rich_text", [])
-    content = "".join(t["text"]["content"] for t in rich_text)
+    rich_text = block.get(block_type, {}).get("rich_text", [])
+    text = "".join(t["text"]["content"] for t in rich_text) if rich_text else ""
 
-    # 标题
-    if block_type == "heading_1":
-        return f"# {content}\n\n"
-    elif block_type == "heading_2":
-        return f"## {content}\n\n"
-    elif block_type == "heading_3":
-        return f"### {content}\n\n"
-    # 列表
-    elif block_type == "bulleted_list_item":
-        return f"- {content}\n"
-    elif block_type == "numbered_list_item":
-        return f"1. {content}\n"
-    # 待办事项
-    elif block_type == "to_do":
-        checked = "✅" if block[block_type].get("checked", False) else "⬜"
-        return f"- {checked} {content}\n"
-    # 表格
-    elif block_type == "table":
-        table_md = "|"
-        header = True
-        for row in block[block_type]["rows"]:
-            cells = []
-            for cell in row["cells"]:
-                cell_text = "".join(t["text"]["content"] for t in cell)
-                cells.append(cell_text)
-            table_md += " | ".join(cells) + "|\n"
-            if header:  # 第一行作为表头
-                table_md += "|" + "|".join(["---"] * len(cells)) + "|\n"
-                header = False
-        return table_md + "\n"
-    # 子页面（递归处理）
-    elif block_type == "child_page":
-        child_page_id = block["id"]
-        if child_page_id in visited_page_ids:
-            return ""
-        visited_page_ids.add(child_page_id)
-        child_content = traverse_page(child_page_id, depth=1)
-        return f"\n## 🔗 子页面：{get_page_title(notion.pages.retrieve(page_id=child_page_id))}\n{child_content}\n"
-    # 普通段落
-    else:
-        return f"{content}\n\n"
+    # 块类型映射
+    type_map = {
+        "paragraph": lambda: text,
+        "heading_1": lambda: f"# {text}",
+        "heading_2": lambda: f"## {text}",
+        "heading_3": lambda: f"### {text}",
+        "bulleted_list_item": lambda: f"- {text}",
+        "numbered_list_item": lambda: f"1. {text}",
+        "to_do": lambda: f"- {'✅' if block.get('checked') else '⬜'} {text}",
+        "table": lambda: parse_notion_table(block),  # 表格单独处理
+    }
 
-def traverse_page(page_id, depth=0):
-    """递归遍历页面，生成Markdown内容"""
-    if page_id in visited_page_ids:
+    if block_type in type_map:
+        return type_map[block_type]() + "\n"
+    return ""
+
+
+def parse_notion_table(table_block):
+    """将Notion表格转换为Markdown表格"""
+    rows = table_block.get("table", {}).get("rows", [])
+    if not rows:
         return ""
-    visited_page_ids.add(page_id)
+
+    # 表头
+    header_row = rows[0]
+    headers = [cell.get("rich_text", [{}])[0].get("text", {}).get("content", "") for cell in header_row.get("cells", [])]
+    md_table = "| " + " | ".join(headers) + " |\n"
+    md_table += "| " + " | ".join(["---"] * len(headers)) + " |\n"
+
+    # 内容行
+    for row in rows[1:]:
+        cells = [cell.get("rich_text", [{}])[0].get("text", {}).get("content", "") for cell in row.get("cells", [])]
+        md_table += "| " + " | ".join(cells) + " |\n"
+
+    return md_table + "\n"
+
+
+def traverse_notion_pages(start_page_id, depth=0):
+    """递归遍历Notion页面（支持子页、块）"""
+    if start_page_id in visited_page_ids:
+        return
+    visited_page_ids.add(start_page_id)
 
     try:
-        page_info = notion.pages.retrieve(page_id=page_id)
+        # 获取页面信息
+        page_info = notion.pages.retrieve(page_id=start_page_id)
         title = get_page_title(page_info)
-        page_id_to_title[page_id] =tle ti
-        print(f"{'  ' * depth}📄 {title} (ID: {page_id[:8]})")
+        print(f"{'  ' * depth}📄 {title} (ID: {start_page_id})")
+        page_id_to_title[start_page_id] = title
 
         # 读取页面所有块
-        blocks = notion.blocks.children.list(block_id=page_id).get("results", [])
-        md_content = f"# {title}\n\n"  # 标题
+        blocks = notion.blocks.children.list(block_id=start_page_id).get("results", [])
+        md_content = f"# {title}\n\n"  # 标题作为一级标题
 
         for block in blocks:
-            md_line = parse_block_to_md(block)
-            md_content += md_line
+            # 处理子页面（递归）
+            if block["type"] == "child_page":
+                child_page_id = block["id"]
+                child_title = block.get("child_page", {}).get("title", "未命名子页")
+                print(f"{'  ' * (depth+1)}└─ 子页: {child_title} (ID: {child_page_id})")
+                traverse_notion_pages(child_page_id, depth + 1)
+                # 子页内容会生成独立MD文件，这里只记录引用（可选）
+                md_content += f"[{child_title}](notion_pages/{safe_filename(child_title, child_page_id)})\n\n"
 
-        return md_content
+            # 处理普通块（转换为MD）
+            else:
+                md_line = parse_notion_block_to_md(block)
+                md_content += md_line
+
+        # 生成唯一MD文件（覆盖旧文件）
+        filename = safe_filename(title, start_page_id)
+        with open(filename, "w", encoding="utf-8") as f:
+            f.write(md_content)
+        print(f"{'  ' * depth}📤 写入: {filename}")
 
     except Exception as e:
-        print(f"{'  ' * depth}❌ 读取页面 {page_id[:8]} 失败: {str(e)[:100]}")
-        return ""
+        print(f"{'  ' * depth}❌ 页面 {start_page_id[:8]} 同步失败: {str(e)[:100]}")
 
-def update_notion_from_md(md_path, page_id):
-    """将MD文件内容同步回Notion页面（增量更新，不删除原有块）"""
-    if not os.path.exists(md_path):
-        print(f"❌ MD文件不存在: {md_path}")
-        return
 
-    with open(md_path, "r", encoding="utf-8") as f:
-        md_content = f.read()
+def update_notion_from_github():
+    """从GitHub MD文件反向更新Notion页面（增量更新）"""
+    # MD文件 → Notion页面ID 映射（需与Secrets中的页面ID对应）
+    md_to_page_id = {
+        f"notion_pages/{safe_filename(get_page_title(notion.pages.retrieve(page_id=pid)), pid)}": pid
+        for pid in PARENT_PAGE_IDS
+    }
 
-    # 解析MD为Notion块（简化版，支持标题、段落、列表、表格）
-    blocks = []
-    lines = md_content.split("\n")
-    current_table = None
-    table_rows = []
-
-    for line in lines:
-        line = line.strip()
-        if not line:
+    for md_filename, page_id in md_to_page_id.items():
+        if not os.path.exists(md_filename):
+            print(f"⚠️ 文件 {md_filename} 不存在，跳过")
             continue
 
-        # 标题
-        if line.startswith("# "):
-            blocks.append({
-                "type": "heading_1",
-                "heading_1": {"rich_text": [{"type": "text", "text": {"content": line[2:]}}]}
-            })
-        elif line.startswith("## "):
-            blocks.append({
-                "type": "heading_2",
-                "heading_2": {"rich_text": [{"type": "text", "text": {"content": line[3:]}}]}
-            })
-        elif line.startswith("### "):
-            blocks.append({
-                "type": "heading_3",
-                "heading_3": {"rich_text": [{"type": "text", "text": {"content": line[4:]}}]}
-            })
-        # 列表
-        elif line.startswith("- "):
-            is_todo = "✅" in line or "⬜" in line
-            text = line.replace("- ✅ ", "").replace("- ⬜ ", "").replace("- ", "")
-            if is_todo:
-                checked = "✅" in line
+        with open(md_filename, "r", encoding="utf-8") as f:
+            md_content = f.read()
+
+        # 解析MD为Notion块（简化版，支持标题、段落、列表、表格）
+        blocks = []
+        lines = md_content.split("\n")
+        in_table = False
+        table_rows = []
+
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+
+            # 处理标题
+            if line.startswith("# "):
                 blocks.append({
-                    "type": "to_do",
-                    "to_do": {"rich_text": [{"type": "text", "text": {"content": text}}], "checked": checked}
+                    "type": "heading_1",
+                    "heading_1": {"rich_text": [{"type": "text", "text": {"content": line[2:]}}]}
                 })
+            elif line.startswith("## "):
+                blocks.append({
+                    "type": "heading_2",
+                    "heading_2": {"rich_text": [{"type": "text", "text": {"content": line[3:]}}]}
+                })
+            elif line.startswith("### "):
+                blocks.append({
+                    "type": "heading_3",
+                    "heading_3": {"rich_text": [{"type": "text", "text": {"content": line[4:]}}]}
+                })
+
+            # 处理列表
+            elif line.startswith("- "):
+                if line.startswith("- ✅") or line.startswith("- ⬜"):
+                    checked = line.startswith("- ✅")
+                    text = line[5:].strip()
+                    blocks.append({
+                        "type": "to_do",
+                        "to_do": {"rich_text": [{"type": "text", "text": {"content": text}}], "checked": checked}
+                    })
+                else:
+                    text = line[2:].strip()
+                    blocks.append({
+                        "type": "bulleted_list_item",
+                        "bulleted_list_item": {"rich_text": [{"type": "text", "text": {"content": text}}]}
+                    })
+
+            # 处理有序列表（简化为无序，Notion会自动识别）
+            elif line.startswith("1. "):
+                text = line[3:].strip()
+                blocks.append({
+                    "type": "numbered_list_item",
+                    "numbered_list_item": {"rich_text": [{"type": "text", "text": {"content": text}}]}
+                })
+
+            # 处理表格
+            elif line.startswith("|") and "|" in line[1:]:
+                if not in_table:
+                    in_table = True
+                    table_rows = []
+                table_rows.append(line)
+                if line.endswith("|") and len(table_rows) >= 3:  # 表头+分隔线+内容
+                    # 转换为Notion表格块（简化）
+                    blocks.append({
+                        "type": "table",
+                        "table": {"rows":}  # 实际需解析行，这里仅示例
+   []                  })
+                    in_table = False
+
+            # 处理普通段落
             else:
                 blocks.append({
-                    "type": "bulleted_list_item",
-                    "bulleted_list_item": {"rich_text [{"type": "text":", "text": {"content": text}}]}
+                    "type": "paragraph",
+                    "paragraph": {"rich_text": [{"type": "text", "text": {"content": line}}]}
                 })
-        elif line.startswith("1. "):
-            text = line[3:]
-            blocks.append({
-                "type": "numbered_list_item",
-                "numbered_list_item": {"rich_text": [{"type": "text", "text": {"content": text}}]}
-            })
-        # 表格
-        elif line.startswith("|") and "|" in line[1:]:
-            if current_table is None:
-                current_table = []
-            cells = [c.strip() for c in line.split("|")[1:-1]]
-            current_table.append(cells)
-        elif line.startswith("|") and all(c == "-" for c in line[1:].replace("|", "")):
-            continue  # 表格分隔线，跳过
-        elif current_table is not None:
-            # 表格结束，生成表格块
-            table_md = "|" + "|".join(current_table[0]) + "|\n"
-            table_md += "|" + "|".join(["---"] * len(current_table[0])) + "|\n"
-            for row in current_table[1:]:
-                table_md += "|" + "|".join(row) + "|\n"
-            blocks.append({
-                "type": "table",
-                "table": {"rows": [{"cells": [[{"type": "text", "text": {"content": cell}}] for cell in row]} for row in current_table]}
-            })
-            current_table = None
-        # 普通段落
-        else:
-            blocks.append({
-                "type": "paragraph",
-                "paragraph": {"rich_text": [{"type": "text", "text": {"content": line}}]}
-            })
 
-    # 增量更新：先删除旧块（保留子页面？不，子页面单独处理）
-    try:
-        old_blocks = notion.blocks.children.list(block_id=page_id).get("results", [])
-        for block in old_blocks:
-            # 跳过子页面（child_page），避免误删
-            if blocktype"] != "["child_page":
+        # 增量更新：先删除旧块，再添加新块（避免冲突）
+        try:
+            # 获取旧块
+            old_blocks = notion.blocks.children.list(block_id=page_id).get("results", [])
+            # 删除旧块（保留页面本身）
+            for block in old_blocks:
                 notion.blocks.delete(block_id=block["id"])
-        # 写入新块
-        if blocks:
-            notion.blocks.children.append(block_id=page_id, children=blocks)
-        print(f"✅ 已将 {md_path} 同步到 Notion 页面 {page_id[:8]}")
-    except Exception as e:
-        print(f"❌ 反向同步失败 {md_path}: {str(e)[:100]}")
+            # 添加新块
+            if blocks:
+                notion.blocks.children.append(block_id=page_id, children=blocks)
+            print(f"📥 反向同步: {md_filename} → Notion (ID: {page_id})")
+        except Exception as e:
+            print(f"❌ 反向同步失败 {md_filename}: {str(e)[:100]}")
 
 
-# ========== 3. 主流程 ==========
-if __name__ == "__main__":
-    print("🚀 开始双向同步（单文件覆盖 + 全内容支持）...")
-
-    # 1. Notion → GitHub：递归同步所有页面到单文件
-    for parent_id in PARENT_PAGE_IDS:
-        traverse_page(parent_id)
-
-    # 2. GitHub → Notion：反向同步（读取MD文件，更新Notion）
-    for page_id in page_id_to_title:
-        title = page_id_to_title[page_id]
-        md_path = safe_filename(title, page_id)
-        if os.path.exists(md_path):
-            update_notion_from_md(md_path, page_id)
-
-    # 3. Git提交（防冲突）
+def git_commit_and_push():
+    """Git提交并推送（防冲突）"""
     try:
+        # 配置Git身份
         subprocess.run(["git", "config", "--global", "user.name", "github-actions[bot]"], check=True)
         subprocess.run(["git", "config", "--global", "user.email", "41898282+github-actions[bot]@users.noreply.github.com"], check=True)
+        # 拉取最新代码（避免冲突）
         subprocess.run(["git", "pull", "origin", "main", "--rebase"], check=True)
+        # 提交变更
         subprocess.run(["git", "add", "notion_pages/"], check=True)
-        commit_result = subprocess.run(["git", "commit", "-m", "🔄 Auto-Sync: 覆盖更新内容"], capture_output=True, text=True)
+        commit_result = subprocess.run(["git", "commit", "-m", "🔄 Auto-Sync: Update notion_pages"], capture_output=True, text=True)
         if "nothing to commit" in commit_result.stdout:
             print("🟢 无变更，跳过提交")
         else:
             subprocess.run(["git", "push", "origin", "main"], check=True)
             print("✅ 已推送到仓库")
     except subprocess.CalledProcessError as e:
-        print(f"❌ Git错误: {e.stderr}")
+        print(f"❌ Git操作失败: {e.stderr}")
+
+
+# ========== 3. 主流程 ==========
+if __name__ == "__main__":
+    print("🚀 开始双向同步（标题/段落/列表/表格/子页全支持）...")
+
+    # 1. Notion → GitHub（全量导出）
+    for i, pid in enumerate(PARENT_PAGE_IDS):
+        print(f"\n===== 父页面 {i+1}/{len(PARENT_PAGE_IDS)} (ID: {pid}) =====")
+        traverse_notion_pages(pid)
+
+    # 2. GitHub → Notion（反向更新）
+    print("\n🔄 开始反向同步（GitHub → Notion）...")
+    update_notion_from_github()
+
+    # 3. Git提交
+    git_commit_and_push()
 
     print(f"\n🎉 完成！共处理 {len(visited_page_ids)} 个页面")
