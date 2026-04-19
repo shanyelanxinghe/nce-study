@@ -1,9 +1,9 @@
-name: Notion ⇄ GitHub 双向同步（单文件覆盖）
+name: Notion ↔ GitHub 双向同步
 on:
   workflow_dispatch:  # 手动触发
-  push:               # 推送时触发
-  schedule:           # 定时触发（每天0点）
-    - cron: '0 0 * * *'
+  push:               # 代码推送触发
+  schedule:
+    - cron: '0 0 * * *'  # 每天凌晨同步
 
 permissions:
   contents: write  # 允许写入仓库
@@ -14,7 +14,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # 拉取完整历史，避免浅克隆问题
+          fetch-depth: 0  # 拉取完整历史，避免冲突
 
       - name: 安装依赖
         run: |
