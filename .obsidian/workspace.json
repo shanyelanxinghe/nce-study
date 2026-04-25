@@ -11,14 +11,14 @@
             "id": "e079e135a50ad287",
             "type": "leaf",
             "state": {
-              "type": "split-diff-view",
+              "type": "markdown",
               "state": {
-                "aFile": "我的第一篇obsidian.md",
-                "bFile": "我的第一篇obsidian.md",
-                "aRef": ""
+                "file": "我的第一篇obsidian.md",
+                "mode": "source",
+                "source": false
               },
-              "icon": "diff",
-              "title": "Diff: 我的第一篇obsidian  (Working Tree)"
+              "icon": "lucide-file",
+              "title": "我的第一篇obsidian"
             }
           }
         ]
@@ -156,12 +156,13 @@
             "state": {
               "type": "outline",
               "state": {
+                "file": "我的第一篇obsidian.md",
                 "followCursor": false,
                 "showSearch": false,
                 "searchQuery": ""
               },
               "icon": "lucide-list",
-              "title": "大纲"
+              "title": "我的第一篇obsidian 的大纲"
             }
           },
           {
@@ -193,8 +194,9 @@
       "obsidian-git:Open Git source control": false
     }
   },
-  "active": "d30b2991a7109092",
+  "active": "e079e135a50ad287",
   "lastOpenFiles": [
+    "我的第一篇obsidian.md",
     "sync.py",
     "notion_pages/我的新概念英语(NCE)学习库_3446f1d0.md",
     "notion_pages/我的新概念英语(NCE)学习库.md",
@@ -209,7 +211,6 @@
     "notion_pages/#_123456_3456f1d0.md",
     "notion_pages",
     "notion-sync.md",
-    "我的第一篇obsidian.md",
     "README.md"
   ]
 }
